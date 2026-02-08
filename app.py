@@ -3,29 +3,32 @@ from pymongo import MongoClient
 import os
 from dotenv import load_dotenv
 
-# 🔐 Load .env (Sirf local development ke liye)
+# 🔐 Environment Variables load karein (Local ke liye .env, Render ke liye Dashboard)
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "default_secret_key")
+app.secret_key = os.environ.get("SECRET_KEY", "secret_portfolio_key")
 
-# 🔐 MongoDB URI: Pehle system environment check karega (Render), phir .env
+# 🔐 MongoDB URI: Dono jagah (Local/Render) CAPS mein hona zaroori hai
 mongo_uri = os.environ.get("MONGO_URI")
 
-# Agar dono jagah nahi mila, tab error dikhayein bina crash kiye
+# Debugging lines (Terminal mein check karne ke liye)
 if not mongo_uri:
     print("⚠️ WARNING: MONGO_URI not found in environment variables!")
+else:
+    print(f"✅ MONGO_URI detected: {mongo_uri[:15]}...")
 
-# 🔗 MongoDB Connection
-try:
-    # TLS/SSL errors se bachne ke liye srv support zaroori hai
-    client = MongoClient(mongo_uri)
-    client.admin.command('ping')
-    print("✅ MongoDB connected successfully")
-    db = client["portfolio_db"]
-except Exception as e:
-    print(f"❌ MongoDB connection failed: {e}")
-    db = None # App crash nahi hogi, handle karega
+# 🔗 MongoDB Connection Logic
+db = None
+if mongo_uri:
+    try:
+        # 'serverSelectionTimeoutMS' timeout set karta hai taaki app hang na ho
+        client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
+        client.admin.command('ping')
+        print("✅ MongoDB connected successfully")
+        db = client["portfolio_db"]
+    except Exception as e:
+        print(f"❌ MongoDB connection failed: {e}")
 
 # ---------------- ROUTES ---------------- #
 
@@ -33,8 +36,12 @@ except Exception as e:
 def index():
     user_data = None
     if db is not None:
-        user_data = db.about_me.find_one()
+        try:
+            user_data = db.about_me.find_one()
+        except Exception:
+            user_data = None
 
+    # Fallback data agar DB se nahi milta
     if not user_data:
         user_data = {
             "name": "Sneha Gade",
@@ -62,37 +69,44 @@ def contact():
         flash("Please fill all required fields!")
         return redirect('/#contact')
 
-    msg_doc = {
-        "name": name,
-        "email": email,
-        "subject": subject,
-        "message": message
-    }
+    try:
+        msg_doc = {
+            "name": name,
+            "email": email,
+            "subject": subject,
+            "message": message
+        }
+        db.contacts.insert_one(msg_doc)
+        flash("✅ Message successfully sent!")
+    except Exception as e:
+        flash(f"❌ Error saving message: {e}")
 
-    db.contacts.insert_one(msg_doc)
-    flash("✅ Message successfully sent!")
     return redirect('/#contact')
 
 
-# ---------------- INITIAL DATA ---------------- #
+# ---------------- INITIAL DATA SETUP ---------------- #
 
 def setup_db():
-    if db is not None and db.about_me.count_documents({}) == 0:
-        db.about_me.insert_one({
-            "name": "Sneha Gade",
-            "degree": "Bachelor in CSE",
-            "phone": "8006757633",
-            "email": "sgade5591@gmail.com",
-            "address": "Bareilly, India",
-            "birthday": "4 September 2005"
-        })
-        print("✅ Initial about_me data inserted")
+    if db is not None:
+        try:
+            if db.about_me.count_documents({}) == 0:
+                db.about_me.insert_one({
+                    "name": "Sneha Gade",
+                    "degree": "Bachelor in CSE",
+                    "phone": "8006757633",
+                    "email": "sgade5591@gmail.com",
+                    "address": "Bareilly, India",
+                    "birthday": "4 September 2005"
+                })
+                print("✅ Initial about_me data inserted")
+        except Exception as e:
+            print(f"⚠️ Could not setup initial data: {e}")
 
 
 # ---------------- MAIN ---------------- #
 
 if __name__ == '__main__':
     setup_db()
-    # Render ke liye dynamic port zaroori hai
+    # 🚀 Render ke liye Host aur Port binding mandatory hai
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
